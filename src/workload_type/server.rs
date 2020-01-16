@@ -8,7 +8,6 @@ use crate::workload_type::{
 
 use crate::workload_type::statefulset_builder::StatefulsetBuilder;
 use std::collections::BTreeMap;
-use log::{warn};
 
 /// A Replicated Server can take one component and scale it up or down.
 pub struct ReplicatedServer {
@@ -18,21 +17,6 @@ pub struct ReplicatedServer {
 impl ReplicatedServer {
     fn labels(&self) -> BTreeMap<String, String> {
         self.meta.labels("Service")
-    }
-    fn add_deployment_builder(&self) -> InstigatorResult {
-        DeploymentBuilder::new(self.kube_name(), self.meta.definition.clone())
-            .parameter_map(self.meta.params.clone())
-            .labels(self.labels())
-            .annotations(self.meta.annotations.clone())
-            .owner_ref(self.meta.owner_ref.clone())
-            .do_request(self.meta.client.clone(), self.meta.namespace.clone(), "add")
-    }
-    fn add_service_builder(&self) -> InstigatorResult {
-        ServiceBuilder::new(self.kube_name(), self.meta.definition.clone())
-            .labels(self.labels())
-            .select_labels(self.meta.select_labels())
-            .owner_ref(self.meta.owner_ref.clone())
-            .do_request(self.meta.client.clone(), self.meta.namespace.clone(), "add")
     }
 }
 
@@ -70,8 +54,19 @@ impl WorkloadType for ReplicatedServer {
     fn add(&self) -> InstigatorResult {
         //pre create config_map
         self.meta.create_config_maps("Service")?;
-        self.add_deployment_builder()?;
-        self.add_service_builder()
+
+        DeploymentBuilder::new(self.kube_name(), self.meta.definition.clone())
+            .parameter_map(self.meta.params.clone())
+            .labels(self.labels())
+            .annotations(self.meta.annotations.clone())
+            .owner_ref(self.meta.owner_ref.clone())
+            .do_request(self.meta.client.clone(), self.meta.namespace.clone(), "add")?;
+
+        ServiceBuilder::new(self.kube_name(), self.meta.definition.clone())
+            .labels(self.labels())
+            .select_labels(self.meta.select_labels())
+            .owner_ref(self.meta.owner_ref.clone())
+            .do_request(self.meta.client.clone(), self.meta.namespace.clone(), "add")
     }
     fn modify(&self) -> InstigatorResult {
         //TODO update config_map
@@ -113,27 +108,12 @@ impl WorkloadType for ReplicatedServer {
         let mut resources = BTreeMap::new();
 
         let key = "deployment/".to_string() + self.kube_name().as_str();
-        let state = self.meta.deployment_status().unwrap_or_else(|e| {
-            if e.to_string().contains("NotFound") {
-                warn!("Deployment not found for instance_name:{} component_name:{}. Recreating it...", 
-                    self.meta.instance_name, self.meta.component_name);
-                self.add_deployment_builder().unwrap_or(());
-            }
-            e.to_string()
-        });
+        let state = self.meta.deployment_status()?;
         resources.insert(key.clone(), state);
 
-        let svc_key = "service/".to_string() + self.kube_name().as_str();
-        let svc_status = ServiceBuilder::new(self.kube_name(), self.meta.definition.clone())
+        let svc_state = ServiceBuilder::new(self.kube_name(), self.meta.definition.clone())
             .get_status(self.meta.client.clone(), self.meta.namespace.clone());
-        let svc_state = svc_status.unwrap_or_else( |e| {
-            if e.to_string().contains("NotFound") {
-                warn!("Service not found for instance_name:{} component_name:{}. Recreating it.", 
-                    self.meta.instance_name, self.meta.component_name);
-                self.add_service_builder().unwrap_or(());
-            }
-            e.to_string()
-            });
+        let svc_key = "service/".to_string() + self.kube_name().as_str();
         resources.insert(svc_key.clone(), svc_state);
 
         Ok(resources)
@@ -150,21 +130,6 @@ impl SingletonServer {
     fn labels(&self) -> BTreeMap<String, String> {
         self.meta.labels("SingletonServer")
     }
-    fn add_statefulset_deployment_builder(&self) -> InstigatorResult {
-        StatefulsetBuilder::new(self.kube_name(), self.meta.definition.clone())
-            .parameter_map(self.meta.params.clone())
-            .labels(self.labels())
-            .annotations(self.meta.annotations.clone())
-            .owner_ref(self.meta.owner_ref.clone())
-            .do_request(self.meta.client.clone(), self.meta.namespace.clone(), "add")
-    }
-    fn add_service_builder(&self) -> InstigatorResult {
-        ServiceBuilder::new(self.kube_name(), self.meta.definition.clone())
-            .labels(self.labels())
-            .select_labels(self.meta.select_labels())
-            .owner_ref(self.meta.owner_ref.clone())
-            .do_request(self.meta.client.clone(), self.meta.namespace.clone(), "add")
-    }
 }
 
 impl KubeName for SingletonServer {
@@ -172,17 +137,25 @@ impl KubeName for SingletonServer {
         self.meta.instance_name.to_string()
     }
 }
-
 impl WorkloadType for SingletonServer {
     fn add(&self) -> InstigatorResult {
         //pre create config_map
         self.meta.create_config_maps("singleton-service")?;
 
         // Create deployment
-        self.add_statefulset_deployment_builder()?;
+        StatefulsetBuilder::new(self.kube_name(), self.meta.definition.clone())
+            .parameter_map(self.meta.params.clone())
+            .labels(self.labels())
+            .annotations(self.meta.annotations.clone())
+            .owner_ref(self.meta.owner_ref.clone())
+            .do_request(self.meta.client.clone(), self.meta.namespace.clone(), "add")?;
 
         // Create service
-        self.add_service_builder()
+        ServiceBuilder::new(self.kube_name(), self.meta.definition.clone())
+            .labels(self.labels())
+            .select_labels(self.meta.select_labels())
+            .owner_ref(self.meta.owner_ref.clone())
+            .do_request(self.meta.client.clone(), self.meta.namespace.clone(), "add")
     }
 
     //TODO: because pod upgrade have many restrictions and very complicated, so we don't support now.
@@ -211,28 +184,12 @@ impl WorkloadType for SingletonServer {
 
         let key = "statefulset/".to_string() + self.kube_name().as_str();
         let state = StatefulsetBuilder::new(self.kube_name(), self.meta.definition.clone())
-            .status(self.meta.client.clone(), self.meta.namespace.clone())
-            .unwrap_or_else(|e| {
-                if e.to_string().contains("NotFound") {
-                    warn!("Deployment not found for instance_name:{} component_name:{}. Recreating it...", 
-                        self.meta.instance_name, self.meta.component_name);
-                    self.add_statefulset_deployment_builder().unwrap_or(());
-                }
-                e.to_string()
-            });
+            .status(self.meta.client.clone(), self.meta.namespace.clone())?;
         resources.insert(key.clone(), state);
 
+        let svc_state = ServiceBuilder::new(self.kube_name(), self.meta.definition.clone())
+            .get_status(self.meta.client.clone(), self.meta.namespace.clone());
         let svc_key = "service/".to_string() + self.kube_name().as_str();
-        let svc_state : String = ServiceBuilder::new(self.kube_name(), self.meta.definition.clone())
-            .get_status(self.meta.client.clone(), self.meta.namespace.clone())
-            .unwrap_or_else( |e| {
-                if e.to_string().contains("NotFound") {
-                    warn!("Statefulset not found for instance_name:{} component_name:{}. Recreating it.", 
-                        self.meta.instance_name, self.meta.component_name);
-                    self.add_service_builder().unwrap_or(());
-                }
-                e.to_string()
-            });
         resources.insert(svc_key.clone(), svc_state);
 
         Ok(resources)

@@ -1,3 +1,4 @@
+use failure::Error;
 use k8s_openapi::api::apps::v1 as apps;
 use k8s_openapi::api::batch::v1 as batchapi;
 use k8s_openapi::api::core::v1 as api;
@@ -89,14 +90,16 @@ impl WorkloadMetadata {
         Ok(())
     }
 
-    pub fn deployment_status(&self) -> Result<String, kube::Error> {
+    pub fn deployment_status(&self) -> Result<String, Error> {
         let deploy: Object<_, apps::DeploymentStatus> =
             match kube::api::Api::v1Deployment(self.client.clone())
                 .within(self.namespace.as_str())
                 .get_status(self.kube_name().as_str())
             {
                 Ok(deploy) => deploy,
-                Err(e) => return Err(e)
+                Err(e) => {
+                    return Ok(e.to_string());
+                }
             };
         let status: apps::DeploymentStatus = deploy.status.unwrap();
         let replica = status.replicas.unwrap_or(0);
@@ -456,7 +459,7 @@ impl ServiceBuilder {
             })
         })
     }
-    pub fn get_status(self, client: APIClient, namespace: String) -> Result<String, kube::Error> {
+    pub fn get_status(self, client: APIClient, namespace: String) -> String {
         match kube::api::Api::v1Service(client)
             .within(namespace.as_str())
             .get_status(self.name.as_str())
@@ -464,11 +467,11 @@ impl ServiceBuilder {
             Ok(status) => {
                 let svc_status: Object<api::ServiceSpec, api::ServiceStatus> = status;
                 if let Some(_state) = svc_status.status {
-                    return Ok("created".to_string());
+                    return "created".to_string();
                 }
-                return Ok("not existed".to_string());
+                "not existed".to_string()
             }
-            Err(e) => return Err(e),
+            Err(e) => e.to_string(),
         }
     }
     pub fn do_request(self, client: APIClient, namespace: String, phase: &str) -> InstigatorResult {

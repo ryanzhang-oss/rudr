@@ -154,10 +154,6 @@ impl TraitImplementation for Ingress {
         let ingress = match client.request::<ext::Ingress>(req) {
             Ok(ingress) => ingress,
             Err(e) => {
-                if e.to_string().contains("NotFound") {
-                    warn!("Ingress not found {}. Recreating ...", e.to_string());
-                    self.add(ns, client).unwrap_or(());
-                }
                 resource.insert(key.clone(), e.to_string());
                 return Some(resource);
             }
